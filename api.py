@@ -60,20 +60,7 @@ class TestListManager:
                 test_lists[cc].append(dict(line))
         return test_lists
 
-    def add(self, username, cc, new_entry, comment):
-        self.repo.create_head(username)
-        tree = self.repo.heads[username].commit.tree
-        filename = f"lists/{cc}.csv"
-        current_master = self.repo.heads.master.commit
-
-        tl = tree.join(filename)
-        tl_string = io.StringIO()
-        csv_reader = csv.reader(blob_to_file(tl))
-        csv_writer = csv.writer(tl_string, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
-        for row in csv_reader:
-            csv_writer.writerow(row)
-        csv_writer.writerow(new_entry)
-
+    def write_commit(self, username, parent_commit, tl_string, filename, comment):
         tl_string.seek(0)
         tl_b = tl_string.read().encode("utf-8")
         tl_bytes_len = len(tl_b)
@@ -81,16 +68,53 @@ class TestListManager:
 
         new_blob = self.repo.odb.store(IStream("blob", tl_bytes_len, tl_bytes))
         entry = BaseIndexEntry((0o100644, new_blob.binsha, 0, filename))
-        index = git.IndexFile.from_tree(self.repo, tree)
-        index.add([entry])
-        index.write()
-        new_commit = index.commit(comment)
+
+        index = git.IndexFile.from_tree(self.repo, parent_commit)
+        index.add([entry], write=False)
+        new_tree = index.write_tree()
+        new_commit = git.Commit.create_from_tree(self.repo, new_tree, comment, head=False)
 
         self.repo.heads[username].commit = new_commit
-        self.repo.heads.master.commit = current_master
 
-    def edit(self, username, cc, new_entry, comment):
-        pass
+    def add(self, username, cc, new_entry, comment):
+        if username not in self.repo.heads:
+            self.repo.create_head(username)
+
+        parent_commit = self.repo.heads[username].commit
+        filename = f"lists/{cc}.csv"
+
+        tl = parent_commit.tree.join(filename)
+        tl_string = io.StringIO()
+        csv_reader = csv.reader(blob_to_file(tl))
+        csv_writer = csv.writer(tl_string, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+        for row in csv_reader:
+            csv_writer.writerow(row)
+        csv_writer.writerow(new_entry)
+
+        self.write_commit(username, parent_commit, tl_string, filename, comment)
+
+    def edit(self, username, cc, old_entry, new_entry, comment):
+        if username not in self.repo.heads:
+            self.repo.create_head(username)
+
+        parent_commit = self.repo.heads[username].commit
+        filename = f"lists/{cc}.csv"
+
+        tl = parent_commit.tree.join(filename)
+        tl_string = io.StringIO()
+        csv_reader = csv.reader(blob_to_file(tl))
+        csv_writer = csv.writer(tl_string, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+        found = False
+        for row in csv_reader:
+            if row == old_entry:
+                found = True
+                csv_writer.writerow(new_entry)
+            else:
+                csv_writer.writerow(row)
+        if not found:
+            raise Exception("Could not find the specified row")
+
+        self.write_commit(username, parent_commit, tl_string, filename, comment)
 
 def main():
     tlm = TestListManager()
@@ -103,22 +127,22 @@ def main():
         "2017-04-12",
         ""
         ""
-    ], "this is a comment")
-    tlm.edit("antani", [
+    ], "add apple.com to italian test list")
+    tlm.edit("antani", "it", [
         "http://btdigg.org/",
         "FILE",
         "File-sharing",
         "2017-04-12",
-        ""
+        "",
         "Site reported to be blocked by AGCOM - Italian Autority on Communication"
     ], [
         "https://btdigg.org/",
         "FILE",
         "File-sharing",
         "2017-04-12",
-        ""
+        "",
         "Site reported to be blocked by AGCOM - Italian Autority on Communication"
-    ])
+    ], "add https to the website url")
 
 if __name__ == "__main__":
     main()
