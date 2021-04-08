@@ -61,30 +61,36 @@ class TestListManager:
         return test_lists
 
     def add(self, username, cc, new_entry, comment):
-        filename = f"lists/{cc}.csv"
-
         self.repo.create_head(username)
+        tree = self.repo.heads[username].commit.tree
+        filename = f"lists/{cc}.csv"
         current_master = self.repo.heads.master.commit
 
         tl = tree.join(filename)
-        tl_string = io.BytesIO()
+        tl_string = io.StringIO()
         csv_reader = csv.reader(blob_to_file(tl))
-        csv_writer = csv.writer(tl_string, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
+        csv_writer = csv.writer(tl_string, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
         for row in csv_reader:
             csv_writer.writerow(row)
         csv_writer.writerow(new_entry)
 
-        tl_string_len = tl_string.tell()
         tl_string.seek(0)
-        tl_bytes = io.BytesIO(tl_string.read().encode("utf-8"))
-        new_blob = self.repo.odb.store(IStream("blob", tl_string_len, tl_bytes))
+        tl_b = tl_string.read().encode("utf-8")
+        tl_bytes_len = len(tl_b)
+        tl_bytes = io.BytesIO(tl_b)
+
+        new_blob = self.repo.odb.store(IStream("blob", tl_bytes_len, tl_bytes))
         entry = BaseIndexEntry((0o100644, new_blob.binsha, 0, filename))
-        index = git.IndexFile.from_tree(self.repo, self.repo.heads[username].commit.tree)
+        index = git.IndexFile.from_tree(self.repo, tree)
         index.add([entry])
         index.write()
         new_commit = index.commit(comment)
+
         self.repo.heads[username].commit = new_commit
         self.repo.heads.master.commit = current_master
+
+    def edit(self, username, cc, new_entry, comment):
+        pass
 
 def main():
     tlm = TestListManager()
@@ -98,6 +104,21 @@ def main():
         ""
         ""
     ], "this is a comment")
+    tlm.edit("antani", [
+        "http://btdigg.org/",
+        "FILE",
+        "File-sharing",
+        "2017-04-12",
+        ""
+        "Site reported to be blocked by AGCOM - Italian Autority on Communication"
+    ], [
+        "https://btdigg.org/",
+        "FILE",
+        "File-sharing",
+        "2017-04-12",
+        ""
+        "Site reported to be blocked by AGCOM - Italian Autority on Communication"
+    ])
 
 if __name__ == "__main__":
     main()
