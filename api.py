@@ -3,6 +3,7 @@ import io
 import csv
 import shutil
 import logging
+from glob import glob
 from pprint import pprint
 
 import git
@@ -15,7 +16,7 @@ class ProgressPrinter(git.RemoteProgress):
     def update(self, op_code, cur_count, max_count=None, message=""):
         print(op_code, cur_count, max_count, cur_count / (max_count or 100.0), message or "NO MESSAGE")
 
-class TestListManager:
+class URLListManager:
     def __init__(self, working_dir, push_repo, master_repo, github_token, ssh_key_path):
         self.working_dir = working_dir
         self.push_repo = push_repo
@@ -114,7 +115,7 @@ class TestListManager:
 
         repo_path = self.get_user_repo_path(username)
         if not os.path.exists(repo_path):
-            repo_path = REPO_DIR
+            repo_path = self.repo_dir
 
         test_lists = {}
         for path in glob(os.path.join("lists", "*.csv")):
@@ -223,17 +224,20 @@ class TestListManager:
         j = r.json()
         return j["state"] != "open"
 
-    def propose_changes(self, username):
-        self.set_state(username, "PUSHING")
-
-        logging.debug("proposing changes")
-
+    def push_to_repo(self, username):
         with self.get_git_env():
             self.repo.remotes.rworigin.push(
                     self.get_user_branchname(username),
                     progress=ProgressPrinter(),
                     force=True
             )
+
+    def propose_changes(self, username):
+        self.set_state(username, "PUSHING")
+
+        logging.debug("proposing changes")
+
+        self.push_to_repo(username)
 
         pr_id = self.open_pr(self.get_user_branchname(username))
         self.set_pr_id(username, pr_id)
@@ -243,7 +247,7 @@ def main():
     with open("GITHUB_TOKEN") as in_file:
         github_token = in_file.read().strip()
 
-    tlm = TestListManager(
+    ulm = URLListManager(
         working_dir=os.path.abspath("working_dir"),
         ssh_key_path=os.path.expanduser("~/.ssh/id_rsa_ooni-bot"),
         master_repo="hellais/test-lists",
@@ -253,7 +257,7 @@ def main():
 
     #test_lists = tlm.get_test_list("antani")
     #pprint(test_lists)
-    tlm.add("antani", "it", [
+    ulm.add("antani", "it", [
         "https://apple.com/",
         "FILE",
         "File-sharing",
@@ -261,7 +265,7 @@ def main():
         "",
         ""
     ], "add apple.com to italian test list")
-    tlm.edit("antani", "it", [
+    ulm.edit("antani", "it", [
         "http://btdigg.org/",
         "FILE",
         "File-sharing",
@@ -276,7 +280,7 @@ def main():
         "",
         "Site reported to be blocked by AGCOM - Italian Autority on Communication"
     ], "add https to the website url")
-    tlm.propose_changes("antani")
+    ulm.propose_changes("antani")
 
 if __name__ == "__main__":
     main()
