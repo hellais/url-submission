@@ -131,6 +131,8 @@ class URLListManager:
 
     def sync_state(self, username):
         state = self.get_state(username)
+        self.repo.remotes.origin.pull(progress=ProgressPrinter())
+
         # If the state is CLEAN or DIRTY we don't have to do anything
         if state == "CLEAN":
             return
@@ -140,6 +142,7 @@ class URLListManager:
             if self.is_pr_resolved(username):
                 shutil.rmtree(self.get_user_repo_path(username))
                 self.repo.git.worktree("prune")
+                self.repo.delete_head(self.get_user_branchname(username))
 
                 self.set_state(username, "CLEAN")
 
