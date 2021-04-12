@@ -9,8 +9,21 @@ from pprint import pprint
 import git
 import requests
 from requests.auth import HTTPBasicAuth
+from flask import Flask
+from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.DEBUG)
+
+VALID_URL = regex = re.compile(
+        r'^(?:http)s?://' # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
+        r'(?::\d+)?' # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+BAD_CHARS = ["\r", "\n", "\t", "\\"]
+
+CATEGORY_CODES = {'ALDR': 'Alcohol & Drugs', 'REL': 'Religion', 'PORN': 'Pornography', 'PROV': 'Provocative Attire', 'POLR': 'Political Criticism', 'HUMR': 'Human Rights Issues', 'ENV': 'Environment', 'MILX': 'Terrorism and Militants', 'HATE': 'Hate Speech', 'NEWS': 'News Media', 'XED': 'Sex Education', 'PUBH': 'Public Health', 'GMB': 'Gambling', 'ANON': 'Anonymization and circumvention tools', 'DATE': 'Online Dating', 'GRP': 'Social Networking', 'LGBT': 'LGBT', 'FILE': 'File-sharing', 'HACK': 'Hacking Tools', 'COMT': 'Communication Tools', 'MMED': 'Media sharing', 'HOST': 'Hosting and Blogging Platforms', 'SRCH': 'Search Engines', 'GAME': 'Gaming', 'CULTR': 'Culture', 'ECON': 'Economics', 'GOVT': 'Government', 'COMM': 'E-commerce', 'CTRL': 'Control content', 'IGO': 'Intergovernmental Organizations', 'MISC': 'Miscelaneous content'}
 
 class ProgressPrinter(git.RemoteProgress):
     def update(self, op_code, cur_count, max_count=None, message=""):
@@ -150,6 +163,7 @@ class URLListManager:
         self.sync_state(username)
 
         logging.debug("adding new entry")
+        # XXX add check to ensure the URL is not duplicate
 
         state = self.get_state(username)
         if state in ("PUSHING", "PR_OPEN"):
@@ -245,6 +259,102 @@ class URLListManager:
         pr_id = self.open_pr(self.get_user_branchname(username))
         self.set_pr_id(username, pr_id)
         self.set_state(username, "PR_OPEN")
+
+class BadURL(HTTPException):
+    code = 400
+    description = "Bad URL"
+
+class BadCategoryCode(HTTPException):
+    code = 400
+    description = "Bad category code"
+
+class BadCategoryDescription(HTTPException):
+    code = 400
+    description = "Bad category description"
+
+class BadDate(HTTPException):
+    code = 400
+    description = "Bad date"
+
+def check_url(url):
+    if not VALID_URL.match(url):
+        raise BadURL()
+    elif any([c in url for c in BAD_CHARS]):
+        raise BadURL()
+    elif url != url.strip():
+        raise BadURL()
+    elif urlparse(url).path == "":
+        raise BadURL()
+
+def validate_entry(entry):
+    url, category_code, category_desc, date_str, user, notes = entry
+    check_url(url)
+    if category_code not in CATEGORY_CODES:
+        raise BadCategoryCode()
+    if category_desc != CATEGORY_CODES[category_code]:
+        raise BadCategoryDescription()
+    try:
+        if datetime.datetime.strptime(date_str, "%Y-%m-%d").date().isoformat() != date_str:
+            raise BadDate()
+    except:
+        raise BadDate()
+
+def get_url_list_manager():
+    return URLListManager(
+        working_dir=os.path.abspath("working_dir"),
+        ssh_key_path=os.path.expanduser("~/.ssh/id_rsa_ooni-bot"),
+        master_repo="hellais/test-lists",
+        push_repo="ooni-bot/test-lists",
+        github_token=github_token
+    )
+
+def get_username():
+    return "antani"
+
+app = Flask(__name__)
+
+@app.route("/api/v1/url-submission/test-list", methods=["GET"])
+def get_test_list():
+    username = get_username()
+
+    ulm = get_url_list_manager()
+    return ulm.get_test_list(username)
+
+@app.route("/api/v1/url-submission/add-url", methods=["POST"])
+def url_submission_add_url():
+    """
+    parameters:
+      - in: body
+        name: add new URL
+        required: true
+        schema:
+          type: object
+          properties:
+            country_code:
+              type: string
+            new_entry:
+              type: array
+    responses:
+      '200':
+        description: New URL confirmation
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+    """
+    username = get_username()
+
+    ulm = get_url_list_manager()
+    validate_entry(request.json["new_entry"])
+    ulm.add(username, request.json["country_code"], request.json["new_entry"])
+    return {
+        "status": "ok"
+    }
+
+@app.route("/api/v1/url-submission/edit-url", methods=["POST"])
+def url_submission_edit_url():
+    pass
 
 def main():
     with open("GITHUB_TOKEN") as in_file:
