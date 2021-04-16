@@ -30,6 +30,9 @@ class ProgressPrinter(git.RemoteProgress):
     def update(self, op_code, cur_count, max_count=None, message=""):
         print(op_code, cur_count, max_count, cur_count / (max_count or 100.0), message or "NO MESSAGE")
 
+class DuplicateURL(Exception):
+    pass
+
 class URLListManager:
     def __init__(self, working_dir, push_repo, master_repo, github_token, ssh_key_path):
         self.working_dir = working_dir
@@ -124,24 +127,34 @@ class URLListManager:
             self.repo.git.worktree("add", "-b", self.get_user_branchname(username), repo_path)
         return git.Repo(repo_path)
 
-    def get_test_list(self, username):
+    def get_test_list(self, username, country_code):
+        if not len(country_code) == 2 and not country_code == "global":
+            raise Exception("Bad country_code")
+
         self.sync_state(username)
 
         repo_path = self.get_user_repo_path(username)
         if not os.path.exists(repo_path):
             repo_path = self.repo_dir
 
-        test_lists = {}
-        for path in glob(os.path.join("lists", "*.csv")):
-            cc = os.path.basename(path).split(".")[0]
-            if not len(cc) == 2 and not cc == "global":
-                continue
-            with open(path) as tl_file:
-                csv_reader = csv.reader(tl_file)
-                for line in csv_reader:
-                    test_lists[cc] = test_lists.get(cc, [])
-                    test_lists[cc].append(line)
-        return test_lists
+        test_list = []
+        path = os.path.join(repo_path, "lists", f"{country_code}.csv")
+        with open(path) as tl_file:
+            csv_reader = csv.reader(tl_file)
+            for line in csv_reader:
+                test_list.append(line)
+        return test_list
+
+    def is_duplicate_url(self, username, country_code, new_url):
+        url_set = set()
+        for row in self.get_test_list(username, country_code):
+            url = row[0]
+            url_set.add(url)
+        if country_code != "global":
+            for row in self.get_test_list(username, "global"):
+                url = row[0]
+                url_set.add(url)
+        return new_url in url_set
 
     def sync_state(self, username):
         state = self.get_state(username)
@@ -173,6 +186,9 @@ class URLListManager:
         repo = self.get_user_repo(username)
         filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
 
+        if self.is_duplicate_url(username, cc, new_entry[0]):
+            raise DuplicateURL()
+
         with open(filepath, "a") as out_file:
             csv_writer = csv.writer(out_file, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
             csv_writer.writerow(new_entry)
@@ -193,6 +209,11 @@ class URLListManager:
         repo = self.get_user_repo(username)
 
         filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
+
+        # If the entry we are changing differs from the previously changed
+        # entry we need to check if it's already present in the test list
+        if new_entry[0] != old_entry[0] and self.is_duplicate_url(username, cc, new_entry[0]):
+            raise DuplicateURL()
 
         out_buffer = io.StringIO()
         with open(filepath, "r") as in_file:
@@ -314,12 +335,12 @@ def get_username():
 
 app = Flask(__name__)
 
-@app.route("/api/v1/url-submission/test-list", methods=["GET"])
-def get_test_list():
+@app.route("/api/v1/url-submission/test-list/<country_code>", methods=["GET"])
+def get_test_list(country_code):
     username = get_username()
 
     ulm = get_url_list_manager()
-    return ulm.get_test_list(username)
+    return ulm.get_test_list(username, country_code)
 
 @app.route("/api/v1/url-submission/add-url", methods=["POST"])
 def url_submission_add_url():
@@ -369,8 +390,6 @@ def main():
         github_token=github_token
     )
 
-    #test_lists = tlm.get_test_list("antani")
-    #pprint(test_lists)
     ulm.add("antani", "it", [
         "https://apple.com/",
         "FILE",

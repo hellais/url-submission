@@ -1,6 +1,6 @@
 import pytest
 
-from api import URLListManager
+from api import URLListManager, DuplicateURL
 
 @pytest.fixture()
 def url_list_manager(tmpdir, mocker):
@@ -37,9 +37,22 @@ def test_add_url_full_workflow(url_list_manager):
     assert url_list_manager.get_state(username) == "PR_OPEN"
 
     url_list_manager.is_pr_resolved.return_value = True
-    url_list_manager.get_test_list(username)
+    url_list_manager.get_test_list(username, "global")
 
     assert url_list_manager.get_state(username) == "CLEAN"
+
+def test_add_duplicate_url(url_list_manager):
+    username = "testusername"
+
+    with pytest.raises(DuplicateURL):
+        url_list_manager.add(username, "it", [
+            "https://www.apple.com/",
+            "FILE",
+            "File-sharing",
+            "2017-04-12",
+            "",
+            ""
+        ], "add apple.com to italian test list")
 
 def test_edit_url(url_list_manager):
     username = "testusername"
