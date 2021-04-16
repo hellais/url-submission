@@ -354,6 +354,8 @@ def url_submission_add_url():
           properties:
             country_code:
               type: string
+            comment:
+              type: string
             new_entry:
               type: array
     responses:
@@ -362,21 +364,64 @@ def url_submission_add_url():
         schema:
           type: object
           properties:
-            status:
-              type: string
+            new_entry:
+              type: array
     """
     username = get_username()
 
     ulm = get_url_list_manager()
     validate_entry(request.json["new_entry"])
-    ulm.add(username, request.json["country_code"], request.json["new_entry"])
+    ulm.add(
+        username=username,
+        cc=request.json["country_code"],
+        new_entry=request.json["new_entry"],
+        comment=request.json["comment"],
+    )
     return {
-        "status": "ok"
+        "new_entry": request.json["new_entry"]
     }
 
 @app.route("/api/v1/url-submission/edit-url", methods=["POST"])
 def url_submission_edit_url():
-    pass
+    """
+    parameters:
+      - in: body
+        name: add new URL
+        required: true
+        schema:
+          type: object
+          properties:
+            country_code:
+              type: string
+            comment:
+              type: string
+            new_entry:
+              type: array
+            old_entry:
+              type: array
+    responses:
+      '200':
+        description: New URL confirmation
+        schema:
+          type: object
+          properties:
+            new_entry:
+              type: array
+    """
+    username = get_username()
+
+    ulm = get_url_list_manager()
+    validate_entry(request.json["new_entry"])
+    ulm.edit(
+        username=username,
+        cc=request.json["country_code"],
+        old_entry=request.json["old_entry"],
+        new_entry=request.json["new_entry"],
+        comment=request.json["comment"],
+    )
+    return {
+        "new_entry": request.json["new_entry"]
+    }
 
 def main():
     with open("GITHUB_TOKEN") as in_file:
