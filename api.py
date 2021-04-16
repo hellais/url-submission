@@ -156,7 +156,7 @@ class URLListManager:
             if self.is_pr_resolved(username):
                 shutil.rmtree(self.get_user_repo_path(username))
                 self.repo.git.worktree("prune")
-                self.repo.delete_head(self.get_user_branchname(username))
+                self.repo.delete_head(self.get_user_branchname(username), force=True)
 
                 self.set_state(username, "CLEAN")
 
