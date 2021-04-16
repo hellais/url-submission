@@ -9,6 +9,7 @@ from pprint import pprint
 
 import git
 import requests
+from filelock import FileLock
 from requests.auth import HTTPBasicAuth
 from flask import Flask
 from werkzeug.exceptions import HTTPException
@@ -72,6 +73,7 @@ class URLListManager:
     def get_user_pr_path(self, username):
         return os.path.join(self.working_dir, "users", username, "pr_id")
 
+
     def get_user_branchname(self, username):
         return f"user-contribution/{username}"
 
@@ -84,8 +86,6 @@ class URLListManager:
             when we are in sync with the current tip of master and no changes have been made
         - IN_PROGRESS:
             when there are some changes in the working tree of the user, but they haven't yet pushed them
-        - PUSHING:
-            when we are pushing the changes made by the user via propose_changes
         - PR_OPEN:
             when the PR of the user is open on github and it's waiting for being merged
         """
@@ -101,7 +101,7 @@ class URLListManager:
 
         The absence of a statefile is an indication of a clean state.
         """
-        assert state in ("IN_PROGRESS", "PUSHING", "PR_OPEN", "CLEAN")
+        assert state in ("IN_PROGRESS", "PR_OPEN", "CLEAN")
 
         logging.debug(f"setting state for {username} to {state}")
         if state == "CLEAN":
@@ -127,11 +127,16 @@ class URLListManager:
             self.repo.git.worktree("add", "-b", self.get_user_branchname(username), repo_path)
         return git.Repo(repo_path)
 
+    def get_user_lock(self, username):
+        lockfile_path = os.path.join(self.working_dir, "users", username, "state.lock")
+        return FileLock(lockfile_path, timeout=5)
+
     def get_test_list(self, username, country_code):
         if not len(country_code) == 2 and not country_code == "global":
             raise Exception("Bad country_code")
 
         self.sync_state(username)
+        self.pull_master_repo()
 
         repo_path = self.get_user_repo_path(username)
         if not os.path.exists(repo_path):
@@ -156,9 +161,11 @@ class URLListManager:
                 url_set.add(url)
         return new_url in url_set
 
+    def pull_master_repo(self):
+        self.repo.remotes.origin.pull(progress=ProgressPrinter())
+
     def sync_state(self, username):
         state = self.get_state(username)
-        self.repo.remotes.origin.pull(progress=ProgressPrinter())
 
         # If the state is CLEAN or IN_PROGRESS we don't have to do anything
         if state == "CLEAN":
@@ -175,68 +182,72 @@ class URLListManager:
 
     def add(self, username, cc, new_entry, comment):
         self.sync_state(username)
+        self.pull_master_repo()
 
         logging.debug("adding new entry")
-        # XXX add check to ensure the URL is not duplicate
 
         state = self.get_state(username)
-        if state in ("PUSHING", "PR_OPEN"):
+        if state in ("PR_OPEN"):
             raise Exception("You cannot edit files while changes are pending")
 
         repo = self.get_user_repo(username)
-        filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
+        with self.get_user_lock(username):
 
-        if self.is_duplicate_url(username, cc, new_entry[0]):
-            raise DuplicateURL()
+            filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
 
-        with open(filepath, "a") as out_file:
-            csv_writer = csv.writer(out_file, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
-            csv_writer.writerow(new_entry)
-        repo.index.add([filepath])
-        repo.index.commit(comment)
+            if self.is_duplicate_url(username, cc, new_entry[0]):
+                raise DuplicateURL()
 
-        self.set_state(username, "IN_PROGRESS")
+            with open(filepath, "a") as out_file:
+                csv_writer = csv.writer(out_file, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+                csv_writer.writerow(new_entry)
+            repo.index.add([filepath])
+            repo.index.commit(comment)
+
+            self.set_state(username, "IN_PROGRESS")
 
     def edit(self, username, cc, old_entry, new_entry, comment):
         self.sync_state(username)
+        self.pull_master_repo()
 
         logging.debug("editing existing entry")
 
         state = self.get_state(username)
-        if state in ("PUSHING", "PR_OPEN"):
+        if state in ("PR_OPEN"):
             raise Exception("You cannot edit the files while changes are pending")
 
         repo = self.get_user_repo(username)
+        with self.get_user_lock(username):
 
-        filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
+            filepath = os.path.join(self.get_user_repo_path(username), "lists", f"{cc}.csv")
 
-        # If the entry we are changing differs from the previously changed
-        # entry we need to check if it's already present in the test list
-        if new_entry[0] != old_entry[0] and self.is_duplicate_url(username, cc, new_entry[0]):
-            raise DuplicateURL()
+            # If the entry we are changing differs from the previously changed
+            # entry we need to check if it's already present in the test list
+            if new_entry[0] != old_entry[0] and self.is_duplicate_url(username, cc, new_entry[0]):
+                raise DuplicateURL()
 
-        out_buffer = io.StringIO()
-        with open(filepath, "r") as in_file:
-            csv_reader = csv.reader(in_file)
-            csv_writer = csv.writer(out_buffer, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+            out_buffer = io.StringIO()
+            with open(filepath, "r") as in_file:
+                csv_reader = csv.reader(in_file)
+                csv_writer = csv.writer(out_buffer, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
 
-            found = False
-            for row in csv_reader:
-                if row == old_entry:
-                    found = True
-                    csv_writer.writerow(new_entry)
-                else:
-                    csv_writer.writerow(row)
-        if not found:
-            raise Exception("Could not find the specified row")
+                found = False
+                for row in csv_reader:
+                    if row == old_entry:
+                        found = True
+                        csv_writer.writerow(new_entry)
+                    else:
+                        csv_writer.writerow(row)
+            if not found:
+                raise Exception("Could not find the specified row")
 
-        with open(filepath, "w") as out_file:
-            out_buffer.seek(0)
-            shutil.copyfileobj(out_buffer, out_file)
-        repo.index.add([filepath])
-        repo.index.commit(comment)
+            with open(filepath, "w") as out_file:
+                out_buffer.seek(0)
+                shutil.copyfileobj(out_buffer, out_file)
+            repo.index.add([filepath])
+            repo.index.commit(comment)
 
-        self.set_state(username, "IN_PROGRESS")
+            self.set_state(username, "IN_PROGRESS")
 
     def open_pr(self, branchname):
         head = f"{self.github_user}:{branchname}"
@@ -272,15 +283,14 @@ class URLListManager:
             )
 
     def propose_changes(self, username):
-        self.set_state(username, "PUSHING")
+        with self.get_user_lock(username):
+            logging.debug("proposing changes")
 
-        logging.debug("proposing changes")
+            self.push_to_repo(username)
 
-        self.push_to_repo(username)
-
-        pr_id = self.open_pr(self.get_user_branchname(username))
-        self.set_pr_id(username, pr_id)
-        self.set_state(username, "PR_OPEN")
+            pr_id = self.open_pr(self.get_user_branchname(username))
+            self.set_pr_id(username, pr_id)
+            self.set_state(username, "PR_OPEN")
 
 class BadURL(HTTPException):
     code = 400
