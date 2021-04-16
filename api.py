@@ -3,6 +3,7 @@ import io
 import csv
 import shutil
 import logging
+import re
 from glob import glob
 from pprint import pprint
 
@@ -14,7 +15,7 @@ from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.DEBUG)
 
-VALID_URL = regex = re.compile(
+VALID_URL = re.compile(
         r'^(?:http)s?://' # http:// or https://
         r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
         r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
@@ -78,7 +79,7 @@ class URLListManager:
         The possible states are:
         - CLEAN:
             when we are in sync with the current tip of master and no changes have been made
-        - DIRTY:
+        - IN_PROGRESS:
             when there are some changes in the working tree of the user, but they haven't yet pushed them
         - PUSHING:
             when we are pushing the changes made by the user via propose_changes
@@ -97,7 +98,7 @@ class URLListManager:
 
         The absence of a statefile is an indication of a clean state.
         """
-        assert state in ("DIRTY", "PUSHING", "PR_OPEN", "CLEAN")
+        assert state in ("IN_PROGRESS", "PUSHING", "PR_OPEN", "CLEAN")
 
         logging.debug(f"setting state for {username} to {state}")
         if state == "CLEAN":
@@ -146,10 +147,10 @@ class URLListManager:
         state = self.get_state(username)
         self.repo.remotes.origin.pull(progress=ProgressPrinter())
 
-        # If the state is CLEAN or DIRTY we don't have to do anything
+        # If the state is CLEAN or IN_PROGRESS we don't have to do anything
         if state == "CLEAN":
             return
-        if state == "DIRTY":
+        if state == "IN_PROGRESS":
             return
         if state == "PR_OPEN":
             if self.is_pr_resolved(username):
@@ -178,7 +179,7 @@ class URLListManager:
         repo.index.add([filepath])
         repo.index.commit(comment)
 
-        self.set_state(username, "DIRTY")
+        self.set_state(username, "IN_PROGRESS")
 
     def edit(self, username, cc, old_entry, new_entry, comment):
         self.sync_state(username)
@@ -214,7 +215,7 @@ class URLListManager:
         repo.index.add([filepath])
         repo.index.commit(comment)
 
-        self.set_state(username, "DIRTY")
+        self.set_state(username, "IN_PROGRESS")
 
     def open_pr(self, branchname):
         head = f"{self.github_user}:{branchname}"
